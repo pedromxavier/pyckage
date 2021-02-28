@@ -4,6 +4,7 @@ import sys
 import site
 import json
 import argparse
+import configparser
 from contextlib import contextmanager
 
 __version__ = '0.1.0'
@@ -16,6 +17,15 @@ class PyckageExit(Exception):
     def __init__(self, code: int=0, *args, **kwargs):
         Exception.__init__(self, *args, **kwargs)
         self.code = code
+
+class PyckageFormatter(dict):
+
+    def __getitem__(self, key):
+        value = dict.__getitem__(self, key)
+        return f'{{{key}}}' if value is None else value
+
+    def __missing__(self, key):
+        return f'{{{key}}}'
 
 class PyckageParser(argparse.ArgumentParser):
     pass
@@ -40,7 +50,7 @@ class Pyckage(object):
 
     _SETUP = {
         'PY_MIN': f"{sys.version_info.major}.{sys.version_info.minor}",
-        'PY_MAX': f"{sys.varsion_info.major + 1}"
+        'PY_MAX': f"{sys.version_info.major + 1}"
     }
 
     def __init__(self, *,
@@ -49,12 +59,14 @@ class Pyckage(object):
             author: str=None,
             path: str=None,
             done: list=None,
+            description: str=None,
             **kwargs):
         self.package = package
         self.version = version
         self.author = author
         self.path = os.path.abspath(path)
         self.done = [('FILE', os.path.join(self.path, '.pyckage'))] if done is None else done
+        self.description = description
         
         ## private
         self.__settings = None
@@ -93,6 +105,7 @@ class Pyckage(object):
     @property
     def json(self):
         return {
+            'description': self.description,
             'version': __version__,
             'package': self.package,
             'author': self.author,
@@ -174,11 +187,39 @@ class Pyckage(object):
             else:
                 raise ValueError('Serious trouble.')
 
-    def template(self, from_: str, to_: str):
-        with open(self.get_path(self._PACKAGE_DATA, from_), 'r') as r_file:
-            with open(to_, 'w') as w_file:
-                for line in r_file:
-                    w_file.write(line)
+    def setup_cfg(self, args: argparse.Namespace):
+        cfg_files = ['setup-plain.cfg']
+
+        if args.data:
+            cfg_files.append('setup-data.cfg')
+        
+        if args.script:
+            cfg_files.append('setup-script.cfg')
+        
+        if args.github:
+            cfg_files.append('setup-github.cfg')
+
+        parser = configparser.ConfigParser()
+        parser.read([self.get_path(self._PACKAGE_DATA, fname) for fname in cfg_files])
+
+        setup_path = os.path.join(self.path, 'setup.cfg')
+
+        with open(setup_path, 'w') as file:
+            parser.write(file)
+
+        with open(setup_path, 'r') as file:
+            source = file.read()
+
+        with open(setup_path, 'w') as file:
+            file.write(source.format_map(PyckageFormatter(self.setup_kwargs)))
+
+    def template(self, from_: str, to_: str, args: argparse.Namespace):
+        if from_ == 'setup.cfg':
+            self.setup_cfg(args)
+        else:
+            with open(self.get_path(self._PACKAGE_DATA, from_), 'r') as r_file:
+                with open(to_, 'w') as w_file:
+                    w_file.write(r_file.read())
 
     def grow_tree(self, path:str, tree: dict, args: argparse.Namespace):
         if type(tree) is not dict:
@@ -190,26 +231,26 @@ class Pyckage(object):
                 new_path = os.path.join(path, k)
                 
                 if v is None: ## File
-                    self.touch(new_path)
                     self.done.append([self.FILE, new_path])
+                    self.touch(new_path)
                 elif v is True: ## Empty dir
-                    os.mkdir(new_path)
                     self.done.append((self.DIR, new_path))
+                    os.mkdir(new_path)
                 elif v is False: ## Skip
                     continue
                 elif type(v) is dict: ## Go deeper
-                    os.mkdir(new_path)
                     self.done.append((self.DIR, new_path))
+                    os.mkdir(new_path)
                     with self.chdir(new_path):
                         self.grow_tree(new_path, v, args)
                 elif type(v) is list: ## Go deeper - All files alias
-                    os.mkdir(new_path)
                     self.done.append((self.DIR, new_path))
+                    os.mkdir(new_path)
                     with self.chdir(new_path):
                         self.grow_tree(new_path, {k: None for k in v}, args)
                 elif type(v) is str: ## load template
-                    self.template(from_=v, to_=new_path)
                     self.done.append([self.FILE, new_path])
+                    self.template(from_=v, to_=new_path, args=args)
                 else:
                     raise TypeError("Invalid type in tree.")
 
@@ -249,8 +290,9 @@ class Pyckage(object):
     @classmethod
     def config(cls, args: argparse.Namespace):
         fields = {
-            'author': cls.validate.author(args.author),
-            'email': cls.validate.email(args.email)
+            'author': cls.validate.author(args.author, null=True),
+            'email': cls.validate.email(args.email, null=True),
+            'user': cls.validate.user(args.user, null=True)
         }
 
         updates = {k: v for k, v in fields.items() if v is not None}
@@ -284,6 +326,7 @@ class Pyckage(object):
         cls.pack_parser.add_argument('-p', '--package', type=str, action='store', help='project name.')
         cls.pack_parser.add_argument('-d', '--data', action='store_true', help='whether to store external data.')
         cls.pack_parser.add_argument('-s', '--script', action='store_true', help='whether to deploy cli script.')
+        cls.pack_parser.add_argument('-g', '--github', action='store_true', help='whether to add github info.')
         cls.pack_parser.set_defaults(func=cls.pack)
 
         ## clear
@@ -293,8 +336,9 @@ class Pyckage(object):
 
         ## config
         cls.config_parser = subparsers.add_parser('config')
-        cls.config_parser.add_argument('-a', '--author', type=str, nargs=1, help='sets default author name.')
-        cls.config_parser.add_argument('-e', '--email', type=str, nargs=1, help='sets default email address.')
+        cls.config_parser.add_argument('-a', '--author', help='sets default author name.')
+        cls.config_parser.add_argument('-e', '--email', help='sets default email address.')
+        cls.config_parser.add_argument('-u', '--user', help='sets default username (github).')
         cls.config_parser.set_defaults(func=cls.config)
 
         ## run
@@ -317,30 +361,36 @@ class Pyckage(object):
         RE_PACKAGE = re.compile(r'^[a-zA-Z][a-zA-Z\_\-]+$')
 
         @classmethod
-        def _regex(cls, regex: re.Pattern, s: str, field: str=""):
-            if type(s) is not str or regex.match(s) is None:
+        def _regex(cls, regex: re.Pattern, s: str, field: str="", null: bool=False):
+            if s is None and null:
+                return s
+            elif type(s) is not str or regex.match(s) is None:
                 raise ValueError(f"Invalid {field}: {s}")
             else:
                 return s
 
         @classmethod
-        def author(cls, author: str):
+        def author(cls, author: str, null:bool=False):
             return author
 
         @classmethod
-        def email(cls, email: str):
-            return cls._regex(cls.RE_EMAIL, email, 'email')
+        def user(cls, user: str, null:bool=False):
+            return user
 
         @classmethod
-        def version(cls, version: str) -> str:
-            return cls._regex(cls.RE_VERSION, version, 'version')
+        def email(cls, email: str, null:bool=False):
+            return cls._regex(cls.RE_EMAIL, email, 'email', null=null)
 
         @classmethod
-        def package(cls, package: str) -> str:
-            return cls._regex(cls.RE_PACKAGE, package, 'package name')
+        def version(cls, version: str, null:bool=False) -> str:
+            return cls._regex(cls.RE_VERSION, version, 'version', null=null)
 
         @classmethod
-        def path(cls, path: {str, None}) -> str:
+        def package(cls, package: str, null:bool=False) -> str:
+            return cls._regex(cls.RE_PACKAGE, package, 'package name', null=null)
+
+        @classmethod
+        def path(cls, path: {str, None}, null:bool=False) -> str:
             if path is None:
                 return os.path.abspath(os.getcwd())
             elif type(path) is str:
