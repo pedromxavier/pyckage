@@ -26,30 +26,39 @@ class Pyckage(object):
 
     DIR = sys.intern('DIR')
     FILE = sys.intern('FILE')
-    
+
+    _PACKAGE_DATA = 'pyckage_data'
 
     _DEFAULT_TREE = {
-        'src': ['__init__.py'],
-        'bin': lambda args: args.script,
+        'src': lambda p, args: {p.package : ['__init__.py']},
+        'bin': lambda p, args: args.script,
         'docs': True,
-        'data': lambda args: args.data,
+        'data': lambda p, args: args.data,
         'setup.py': 'setup.py',
         'setup.cfg': 'setup.cfg'
     }
 
-    def __init__(self, 
+    _SETUP = {
+        'PY_MIN': f"{sys.version_info.major}.{sys.version_info.minor}",
+        'PY_MAX': f"{sys.varsion_info.major + 1}"
+    }
+
+    def __init__(self, *,
             package: str=None,
             version: str=None,
             author: str=None,
             path: str=None,
             done: list=None,
-            *args, **kwargs):
+            **kwargs):
         self.package = package
         self.version = version
         self.author = author
         self.path = os.path.abspath(path)
         self.done = [('FILE', os.path.join(self.path, '.pyckage'))] if done is None else done
-    
+        
+        ## private
+        self.__settings = None
+
     @staticmethod
     @contextmanager
     def chdir(path: str):
@@ -78,8 +87,8 @@ class Pyckage(object):
             pass
 
     @classmethod
-    def from_json(cls, json: dict):
-        return cls(**json)
+    def from_json(cls, mapping: dict):
+        return cls(**mapping)
 
     @property
     def json(self):
@@ -90,6 +99,16 @@ class Pyckage(object):
             'path': self.path,
             'done': self.done
         }
+
+    @property
+    def settings(self):
+        if self.__settings is None:
+            self.__settings = self.get_config()
+        return self.__settings
+
+    @property
+    def setup_kwargs(self):
+        return {**self.json, **self.settings, **self._SETUP}
 
     @classmethod
     def ask(cls, question: str, requestion: str=None, validate: callable=None):
@@ -105,7 +124,6 @@ class Pyckage(object):
                     answer = input(requestion)
                     continue
         return answer
-        
 
     @classmethod
     def pack(cls, args: argparse.Namespace):
@@ -114,18 +132,22 @@ class Pyckage(object):
         try:
             ## Validate args
             path = cls.validate.path(args.path)
-            package = cls.validate.package(args.package)
-
             pyckage_path = os.path.join(path, '.pyckage')
-
             if os.path.exists(pyckage_path):
                 ## TODO: update pyckage
                 # pyckage = cls.load(args)
                 cls.exit(0, 'pyckage already built.')
             else:
-                pyckage = cls(package=package, path=path)
+                if args.package is None:
+                    args.package = os.path.basename(os.path.normpath(path))
 
-                ## Create directories
+                package = cls.validate.package(args.package)
+                pyckage = cls(
+                    package=package,
+                    path=path
+                    )
+
+                ## Create directories and files
                 pyckage.grow_tree(path, cls._DEFAULT_TREE, args)
 
             with open(pyckage_path, 'w') as file:
@@ -153,7 +175,7 @@ class Pyckage(object):
                 raise ValueError('Serious trouble.')
 
     def template(self, from_: str, to_: str):
-        with open(self.get_path('pyckage_data', from_), 'r') as r_file:
+        with open(self.get_path(self._PACKAGE_DATA, from_), 'r') as r_file:
             with open(to_, 'w') as w_file:
                 for line in r_file:
                     w_file.write(line)
@@ -163,7 +185,7 @@ class Pyckage(object):
             raise TypeError('Argument ``tree`` must be dict.')
         else:
             for k, v in tree.items():
-                if callable(v): v = v(args)
+                if callable(v): v = v(self, args)
 
                 new_path = os.path.join(path, k)
                 
@@ -192,18 +214,6 @@ class Pyckage(object):
                     raise TypeError("Invalid type in tree.")
 
     @classmethod
-    def pack_subdirs(cls, args: argparse.Namespace):
-        subdirs = ['src', 'docs']
-        if args.data:
-            subdirs.append('data')
-        return subdirs
-
-    @classmethod
-    def pack_files(cls, args: argparse.Namespace):
-        files = ['setup.py', 'setup.cfg']
-        return files
-
-    @classmethod
     def clear(cls, args: argparse.Namespace):
         pyckage: cls = cls.load(args)
         pyckage.rollback()
@@ -225,6 +235,38 @@ class Pyckage(object):
         raise PyckageExit(code, msg)
 
     @classmethod
+    def get_config(cls) -> dict:
+        path = cls.get_path(cls._PACKAGE_DATA, '.pyckage-config')
+        with open(path, 'r') as file:
+            return json.load(file)
+    
+    @classmethod
+    def set_config(cls, settings: dict):
+        path = cls.get_path(cls._PACKAGE_DATA, '.pyckage-config')
+        with open(path, 'w') as file:
+            json.dump(settings, file)  
+
+    @classmethod
+    def config(cls, args: argparse.Namespace):
+        fields = {
+            'author': cls.validate.author(args.author),
+            'email': cls.validate.email(args.email)
+        }
+
+        updates = {k: v for k, v in fields.items() if v is not None}
+
+        settings = cls.get_config()
+
+        if not updates:
+            for k, v in settings.items():
+                print(f"{k} = {v}")
+        else:
+            for k, v in updates.items():
+                settings[k] = v
+
+            cls.set_config(settings)
+
+    @classmethod
     def cli(cls):
         """Command-line interface
         """
@@ -238,16 +280,22 @@ class Pyckage(object):
 
         ## pack
         cls.pack_parser = subparsers.add_parser('pack')
-        cls.pack_parser.add_argument('package', type=str, help='project name.')
         cls.pack_parser.add_argument('path', type=str, nargs='?', help='packaging path.')
+        cls.pack_parser.add_argument('-p', '--package', type=str, action='store', help='project name.')
         cls.pack_parser.add_argument('-d', '--data', action='store_true', help='whether to store external data.')
         cls.pack_parser.add_argument('-s', '--script', action='store_true', help='whether to deploy cli script.')
         cls.pack_parser.set_defaults(func=cls.pack)
 
-        ## build
-        cls.build_parser = subparsers.add_parser('clear')
-        cls.build_parser.add_argument('path', type=str, nargs='?', help='packaging path.')
-        cls.build_parser.set_defaults(func=cls.clear)
+        ## clear
+        cls.clear_parser = subparsers.add_parser('clear')
+        cls.clear_parser.add_argument('path', type=str, nargs='?', help='packaging path.')
+        cls.clear_parser.set_defaults(func=cls.clear)
+
+        ## config
+        cls.config_parser = subparsers.add_parser('config')
+        cls.config_parser.add_argument('-a', '--author', type=str, nargs=1, help='sets default author name.')
+        cls.config_parser.add_argument('-e', '--email', type=str, nargs=1, help='sets default email address.')
+        cls.config_parser.set_defaults(func=cls.config)
 
         ## run
         args = cls.parser.parse_args()
@@ -263,22 +311,33 @@ class Pyckage(object):
         class Invalid(Exception):
             pass
 
+        RE_AUTHOR = None
+        RE_EMAIL = re.compile(r'^(([^<>()[\]\.,;:\s@\"]+(\.[^<>()[\]\.,;:\s@\"]+)*)|(\".+\"))@(([^<>()[\]\.,;:\s@\"]+\.)+[^<>()[\]\.,;:\s@\"]{2,})$')
         RE_VERSION = re.compile(r'^(0|[1-9]\d*)(\.(0|[1-9]\d*))(\.(0|[1-9]\d*))?$')
         RE_PACKAGE = re.compile(r'^[a-zA-Z][a-zA-Z\_\-]+$')
 
         @classmethod
-        def version(cls, version: str) -> str:
-            if type(version) is not str or cls.RE_VERSION.match(version) is None:
-                raise ValueError(f"Invalid version: {version}")
+        def _regex(cls, regex: re.Pattern, s: str, field: str=""):
+            if type(s) is not str or regex.match(s) is None:
+                raise ValueError(f"Invalid {field}: {s}")
             else:
-                return version
+                return s
+
+        @classmethod
+        def author(cls, author: str):
+            return author
+
+        @classmethod
+        def email(cls, email: str):
+            return cls._regex(cls.RE_EMAIL, email, 'email')
+
+        @classmethod
+        def version(cls, version: str) -> str:
+            return cls._regex(cls.RE_VERSION, version, 'version')
 
         @classmethod
         def package(cls, package: str) -> str:
-            if type(package) is not str or cls.RE_PACKAGE.match(package) is None:
-                raise ValueError(f"Invalid packge name: {package}")
-            else:
-                return package
+            return cls._regex(cls.RE_PACKAGE, package, 'package name')
 
         @classmethod
         def path(cls, path: {str, None}) -> str:
@@ -292,7 +351,8 @@ class Pyckage(object):
             else:
                 raise TypeError(f"Invalid path type {type(path)}")
 
-main = Pyckage.cli
+def main(*args, **kwargs):
+    return Pyckage.cli(*args, **kwargs)
 
 if __name__ == '__main__':
     main()
