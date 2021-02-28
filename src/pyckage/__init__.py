@@ -1,0 +1,1 @@
+from .pyckage import main

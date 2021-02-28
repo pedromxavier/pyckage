@@ -1,2 +1,2 @@
 # pyckage
-Python package template (generator, maybe)
+Python package template (generator, maybe).
