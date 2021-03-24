@@ -5,9 +5,11 @@
         "cond",
         "data",
         "fname",
+        "nargs",
         "pycakge",
         "pyckage",
         "pyckagelib",
+        "pyckages",
         "setupcfg"
     ]
 }

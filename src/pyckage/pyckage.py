@@ -5,6 +5,7 @@ import site
 import json
 import pathlib
 import argparse
+import platform
 import configparser
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -16,21 +17,13 @@ from .pyckagelib import (
     FileTree,
     FileTemplate,
     FileTracker,
-    Config,
     Validate,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 ## To be used with the module
 _PYCKAGE_DATA = PackageData("pyckage")
-
-
-@dataclass
-class PyckageConfig(Config):
-    author: str
-    email: str
-    user: str
 
 
 class PyckageValidate(Validate):
@@ -158,19 +151,21 @@ class PyckageTree(FileTree):
 class Pyckage(object):
     """"""
 
-    package_data = PackageData("pyckage", config_type=PyckageConfig)
+    package_data = PackageData("pyckage")
 
     def __init__(
         self,
         *,
+        description: str = None,
         package: str = None,
         version: str = None,
         author: str = None,
         email: str = None,
         user: str = None,
         path: str = None,
+        meta: dict = None,
         args: argparse.Namespace = None,
-        description: str = None,
+        
         **kwargs,
     ):
         self.description = description
@@ -181,7 +176,7 @@ class Pyckage(object):
         self.args = args
         self.user = user
         self.path = pathlib.Path(path).absolute()
-
+        self.meta = meta
         # self.Tree = PyckageTree.Tree(package=self.package, args=self.args)
         # self.tree = self.Tree.tree()
 
@@ -213,19 +208,17 @@ class Pyckage(object):
         return {**self.json, **self.config, **self.version}
 
     @classmethod
-    def load(cls, args: argparse.Namespace):
-        path = pathlib.Path(PyckageValidate.path(args.path))
+    def load(cls, pyckage_path: str):
+        path = pathlib.Path(pyckage_path).joinpath(".pyckage").absolute()
 
-        pyckage_path = path.joinpath(".pyckage")
+        if not path.exists():
+            raise FileNotFoundError(f"No Pyckage installed at `{pyckage_path}`.")
 
-        if os.path.exists(pyckage_path):
-            with open(pyckage_path, mode="r") as file:
-                return cls.from_json(json.load(file))
-        else:
-            cls.exit(1, f"No pyckage defined at `{path}`.")
+        with open(path, mode="r") as file:
+            return cls.from_dict(json.load(file))
 
     @classmethod
-    def from_json(cls, mapping: dict):
+    def from_dict(cls, mapping: dict):
         return cls(**mapping)
 
     @classmethod
@@ -261,22 +254,22 @@ class Pyckage(object):
         author: str = args.author
 
         if author is None:
-            author = config['author']
+            author = config["author"]
 
         email: str = args.email
 
         if email is None:
-            email = config['email']
+            email = config["email"]
 
         user: str = args.user
 
         if user is None:
-            user = config['user']
+            user = config["user"]
 
         description: str = args.description
 
         if description is None:
-            description = '?'
+            description = "?"
 
         pyckage = cls(
             package=package,
@@ -293,11 +286,49 @@ class Pyckage(object):
 
     @classmethod
     def JSON_ENCODE(cls, pyckage):
-        return {}
+        """
+        {
+            'meta': {
+                    'pyckage_version': '0.0.0',
+                    'platform': 'windows',
+                    'py_min': '3.7',
+                    'py_max': '4',
+                },
+            'package': 'pyckage',
+            'version': '1.0.0',
+            'author': 'Author Smith',
+            'email': 'author@email.net',
+            'user': 'author1998',
+            'path': 'c:/users/author/pyckage/',
+            'description': 'This is clearly a Python Package'
+        }
+        """
+        return json.dumps(
+            {
+                "meta": {
+                    "pyckage_version": __version__,
+                    "system_platform": platform.system(),
+                    "py_min": pyckage._py_min,
+                    "py_max": pyckage._py_max,
+                },
+                "description": "This is clearly a Python Package",
+                "package": pyckage.package,
+                "version": pyckage.version,
+                "author": pyckage.author,
+                "email": pyckage.email,
+                "user": pyckage.user,
+                "path": pyckage.path,
+            }
+        )
 
     @classmethod
-    def JSON_DECODE(cls, ):
+    def JSON_DECODE(cls):
         return cls()
+
+    # Some Checks
+    @classmethod
+    def has_pyckage(cls, path: str) -> bool:
+        return pathlib.Path(path).joinpath(".pyckage").exists()
 
     @classmethod
     def exit(cls, code: int = 0, msg: str = ""):

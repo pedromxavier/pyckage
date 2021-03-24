@@ -17,24 +17,28 @@ class PackageData:
 
     __ref__ = {}
 
-    def __new__(cls, package_data: str):
+    def __new__(cls, package: str):
         """"""
-        if package_data not in cls.__ref__:
-            cls.__ref__[package_data] = object.__new__(cls)
-        return cls.__ref__
+        if package not in cls.__ref__:
+            cls.__ref__[package] = object.__new__(cls)
+        return cls.__ref__[package]
 
-    def __init__(self, package_data: str):
+    def __init__(self, package: str):
         """"""
-        self.PACKAGE_DATA = package_data
+        self.package = package
+
+    @property
+    def package_data(self):
+        return f"{self.package}_data"
 
     def get_config(self) -> dict:
         """"""
-        with self.open_data(f".{self.PACKAGE_DATA}-config", mode="r") as file:
+        with self.open_data(f".{self.package}-config", mode="r") as file:
             return json.load(file)
 
     def set_config(self, config: dict):
         """"""
-        with self.open_data(f".{self.PACKAGE_DATA}-config", mode="w") as file:
+        with self.open_data(f".{self.package}-config", mode="w") as file:
             json.dump(config, file)
 
     def get_data_path(self, fname: str) -> pathlib.Path:
@@ -45,20 +49,25 @@ class PackageData:
         >>> PyckageData.get_data_path('') # retrieves base path
         """
 
-        if self.PACKAGE_DATA is not None:
+        if self.package_data is not None:
             sys_path = (
-                pathlib.Path(sys.prefix).joinpath(self.PACKAGE_DATA, fname).absolute()
+                pathlib.Path(sys.prefix).joinpath(self.package_data, fname).absolute()
             )
             if not os.path.exists(sys_path):
                 usr_path = (
                     pathlib.Path(site.USER_BASE)
-                    .joinpath(self.PACKAGE_DATA, fname)
+                    .joinpath(self.package_data, fname)
                     .absolute()
                 )
                 if not os.path.exists(usr_path):
-                    raise FileNotFoundError(
-                        f"File {fname} not installed in {self.PACKAGE_DATA}."
-                    )
+                    if fname:
+                        raise FileNotFoundError(
+                            f"File {fname} not installed in {self.package_data}."
+                        )
+                    else:
+                        raise FileNotFoundError(
+                            f"Package data `{self.package_data}` not installed."
+                        )
                 else:
                     return pathlib.Path(usr_path)
             else:
@@ -82,8 +91,8 @@ class PackageData:
         **kwargs: dict
             Extra keyword-arguments for passing to open(...)
         """
-        if self.PACKAGE_DATA is None:
-            raise NameError("PycakgeData.PACKAGE_DATA is not defined.")
+        if self.package_data is None:
+            raise NameError("PycakgeData.package_data is not defined.")
         else:
             path = self.get_data_path("")
             return open(
