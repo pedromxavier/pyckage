@@ -29,23 +29,34 @@ _PYCKAGE_DATA = PackageData("pyckage")
 class PyckageValidate(Validate):
     """"""
 
-    RE_AUTHOR = None
+    RE_FLAGS = re.UNICODE
+
+    RE_AUTHOR = re.compile(r"[\S ]+", RE_FLAGS)
+    RE_USER = re.compile(r"[a-zA-Z]+", RE_FLAGS)
     RE_EMAIL = re.compile(
-        r"^(([^<>()[\]\.,;:\s@\"]+(\.[^<>()[\]\.,;:\s@\"]+)*)|(\".+\"))@(([^<>()[\]\.,;:\s@\"]+\.)+[^<>()[\]\.,;:\s@\"]{2,})$"
+        r"^(([^<>()[\]\.,;:\s@\"]+(\.[^<>()[\]\.,;:\s@\"]+)*)|(\".+\"))@(([^<>()[\]\.,;:\s@\"]+\.)+[^<>()[\]\.,;:\s@\"]{2,})$",
+        RE_FLAGS,
     )
-    RE_VERSION = re.compile(r"^(0|[1-9]\d*)(\.(0|[1-9]\d*))(\.(0|[1-9]\d*))?$")
-    RE_PACKAGE = re.compile(r"^[a-zA-Z][a-zA-Z\_\-]+$")
+    RE_VERSION = re.compile(
+        r"^(0|[1-9]\d*)(\.(0|[1-9]\d*))(\.(0|[1-9]\d*))?$", RE_FLAGS
+    )
+    RE_PACKAGE = re.compile(r"^[a-zA-Z][a-zA-Z\_\-]+$", RE_FLAGS)
+    RE_DESCRIPTION = re.compile(r"[\S\s]*", RE_FLAGS | re.MULTILINE)
 
     @classmethod
-    def author(cls, author: str, null: bool = False):
-        return author
+    def description(cls, description: str, null: bool = False) -> str:
+        return cls._regex(cls.RE_DESCRIPTION, description, "description", null=null)
 
     @classmethod
-    def user(cls, user: str, null: bool = False):
-        return user
+    def author(cls, author: str, null: bool = False) -> str:
+        return cls._regex(cls.RE_AUTHOR, author, "author", null=null)
 
     @classmethod
-    def email(cls, email: str, null: bool = False):
+    def user(cls, user: str, null: bool = False) -> str:
+        return cls._regex(cls.RE_AUTHOR, user, "user", null=null)
+
+    @classmethod
+    def email(cls, email: str, null: bool = False) -> str:
         return cls._regex(cls.RE_EMAIL, email, "email", null=null)
 
     @classmethod
@@ -67,6 +78,10 @@ class PyckageValidate(Validate):
                 return os.path.abspath(path)
         else:
             raise TypeError(f"Invalid path type {type(path)}")
+
+    @classmethod
+    def meta(cls, meta: dict, null: bool = False) -> dict:
+        return meta
 
 
 class PyckageTemplate(FileTemplate):
@@ -165,7 +180,6 @@ class Pyckage(object):
         path: str = None,
         meta: dict = None,
         args: argparse.Namespace = None,
-        
         **kwargs,
     ):
         self.description = description
@@ -175,10 +189,50 @@ class Pyckage(object):
         self.email = email
         self.args = args
         self.user = user
-        self.path = pathlib.Path(path).absolute()
-        self.meta = meta
+        self.path = path if path is None else pathlib.Path(path).absolute()
+        self.meta = meta if meta is not None else {}
+
+        self._py_min = self.kwget('py_min', self.meta, f'{sys.version_info.major}.{sys.version_info.minor}')
+        self._py_max = self.kwget('py_max', self.meta, f'{sys.version_info.major + 1}')
+
+        self.validate()
         # self.Tree = PyckageTree.Tree(package=self.package, args=self.args)
         # self.tree = self.Tree.tree()
+
+    @classmethod
+    def kwget(cls, key: object, kwargs: dict, default: object = None):
+        try:
+            return kwargs[key]
+        except KeyError:
+            return default
+
+    def validate(self):
+        try:
+            # description
+            self.description = PyckageValidate.description(self.description)
+
+            # package
+            self.package = PyckageValidate.package(self.package)
+
+            # version
+            self.version = PyckageValidate.version(self.version)
+
+            # author
+            self.author = PyckageValidate.author(self.author)
+
+            # email
+            self.email = PyckageValidate.email(self.email)
+
+            # user
+            self.user = PyckageValidate.user(self.user)
+
+            self.validate_meta()
+        except PyckageValidate.Invalid as error:
+            raise ValueError(*error.args)
+
+    def validate_meta(self):
+        """"""
+        self.meta = PyckageValidate.meta(self.meta)
 
     @property
     def json(self):
@@ -322,8 +376,8 @@ class Pyckage(object):
         )
 
     @classmethod
-    def JSON_DECODE(cls):
-        return cls()
+    def JSON_DECODE(cls, data: dict):
+        return cls(**data)
 
     # Some Checks
     @classmethod
