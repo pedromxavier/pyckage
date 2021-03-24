@@ -1,0 +1,1 @@
+from .{package}lib import main

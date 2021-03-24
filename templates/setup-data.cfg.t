@@ -1,3 +1,3 @@
 [options.data_files]
 {package}_data =
-    {data_files}
+    {package_data}
