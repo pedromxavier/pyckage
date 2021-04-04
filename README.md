@@ -1,2 +1,7 @@
 # pyckage
-Python package template (generator, maybe).
+Python package management tool and template builder.
+
+## Install
+```shell
+$ pip install pyckage
+```
